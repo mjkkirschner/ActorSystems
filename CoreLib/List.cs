@@ -17,6 +17,32 @@
         [IsVisibleInDynamoLibrary(false)]
         public static class List
         {
+            public static IList Increment(IList list,int inc)
+            {
+                var output = new List<int>();
+                foreach (dynamic item in list)
+                {
+                    output.Add(item + inc);
+                }
+                return output;
+            }
+
+            public static IList Mod(IList list, int modWith)
+            {
+                var output = new List<int>();
+                foreach (dynamic item in list)
+                {
+                    output.Add(item % modWith);
+                }
+                return output;
+            }
+
+
+            public static IList EmptyListOfSize(double size)
+            {
+                return new object[(int)size];
+            }
+
             /// <summary>
             ///     Returns an Empty List.
             /// </summary>

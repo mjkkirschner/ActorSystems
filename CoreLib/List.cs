@@ -40,7 +40,7 @@
 
             public static IList EmptyListOfSize(double size)
             {
-                return new object[(int)size];
+                return new int[(int)size];
             }
 
             /// <summary>

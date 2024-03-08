@@ -9,21 +9,28 @@ using ActorSystems.JsonConverters;
 using ActorSystems.Messages;
 using System.Threading;
 using System.ComponentModel.DataAnnotations;
+using Akka.Dispatch.SysMsg;
+using System.Collections;
 namespace ActorSystems
 {
     internal class Program
     {
         static void Main(string[] args)
         {
-            Console.WriteLine("Hello, World! Actor System Starting");
+            Console.WriteLine("Hello, World! Loading shared dlls");
             Assembly.LoadFrom(System.IO.Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "CoreLib.dll"));
+        
+            Console.WriteLine("Starting actor system!!!");
             ActorSystem system = ActorSystem.Create("system");
             var orch = system.ActorOf<OrchestratorActor>("orchestrator");
+
+            Console.WriteLine("sending command list to orchestrate");
+
             var commandList = new FunctionCallComputeRequest[]
             {
-                new FunctionCallComputeRequest("32", "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",32,"data0"),
-                new FunctionCallComputeRequest("['data0',100]", "CoreLib","CoreLib.DSCore.List","Increment",0, "data1"),
-                new FunctionCallComputeRequest("['data1',255]", "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",0, "data2")
+                new FunctionCallComputeRequest([new Argument("size",false,0,32)] , "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",320000,"var_data0"),
+                new FunctionCallComputeRequest([new Argument("var_data0", true,1,null),new Argument("increment",false,0,100)], "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data1"),
+                new FunctionCallComputeRequest([new Argument("var_data1", true,1,null),new Argument("modval",false,0,255)], "CoreLib","CoreLib.DSCore.List","Mod",0, "var_data2")
             };
             orch.Tell(new OrchestrateProgramMessage(commandList));
 
@@ -35,6 +42,7 @@ namespace ActorSystems
     {
         int programCounter = 0;
         string currentID;
+        static TimeSpan timeout = TimeSpan.FromMilliseconds(10000000);
 
         //maps id of replicated request to value produced by that instruction.
         Dictionary<string, object> state = new Dictionary<string, object>();
@@ -47,12 +55,49 @@ namespace ActorSystems
             Receive<OrchestrateProgramMessage>(m =>
             {
                 currentCommandList = m.commandList;
+                if(m.commandList.Length-1 < programCounter)
+                {
+                    return;
+                }
                 var currentInst = m.commandList[programCounter];
                 currentID = currentInst.ID;
 
+                //we need to replace the data in the request we're about to make with the data we've previously computed.
+                //first search the input args for identifiers
+                var ids = currentInst.Args.Where(x => x.IsIdentifer);
+                //use those ids to lookup the values in the state dict.
+                if(ids.Any()) {
+                    //TODO for now only handle one identifer.
+                    if (ids.Count() > 1)
+                    {
+                        throw new NotImplementedException();
+                    }
+                    var lastcomputed = state[ids.FirstOrDefault().Name];
+
+                    //!!!!!!!!!!
+                    //TODO THIS IS BAD - instead create a copy of the current instruction and use that as a message -
+                    //don't modify the existing message... when we have time fix this.
+                    ids.FirstOrDefault().Value = lastcomputed;
+
+                    //we can also try to compute the replication factor here based on the size of the input.
+                    //only modify if it was not set initially in command list.
+                    //TODO same here - don't modify this directly, create a clone to modify.
+                    if (currentInst.numreplications == 0) {
+                       
+                        if(lastcomputed is ICollection ia)
+                        {
+                            currentInst.numreplications = (uint)ia.Count;
+                        }
+                        else
+                        {
+                            currentInst.numreplications = 1;
+                        }
+                    }
+                }
+
                 //create a tree of actors to exceute this instruction.
-                var gatherOutputActor = Context.System.ActorOf<ComputeAggregatorActor>();
-                gatherOutputActor.Tell(new AggregateComputeRequest() { timeout = TimeSpan.FromMilliseconds(10000), functionCallComputeRequest = currentInst });
+                var gatherOutputActor = Context.ActorOf<ComputeAggregatorActor>($"aggregator-{currentInst.functionName}");
+                gatherOutputActor.Tell(new AggregateComputeRequest() { timeout = timeout, functionCallComputeRequest = currentInst });
                 state.Add(currentID, null);
             });
 
@@ -64,51 +109,14 @@ namespace ActorSystems
                 //4. if the actor timed out - we should retry by spinning up a new computeAggActor. 
                 //TODO interesting... we could retry sub computations and not have to redo the entire computation again...
 
+
                 state[currentID] = m.data;
 
                 programCounter = programCounter + 1;
-                var currentInst = currentCommandList[programCounter];
-                Context.Self.Tell(new AggregateComputeRequest() { timeout = TimeSpan.FromMilliseconds(10000), functionCallComputeRequest = currentInst });
+                Context.Self.Tell(new OrchestrateProgramMessage(currentCommandList));
 
             });
         }
-    }
-
-    public class ComputeLoadGenerator : Akka.Actor.ReceiveActor
-    {
-        public ComputeLoadGenerator()
-        {
-            //when we get a request to gen some load
-            //parse the message and generate compute request mesages and send them to the router.
-            //in practice these messages might come from a client or API.
-            Receive<GenerateLoadRequest>(m =>
-            {
-
-                //also create a temporary actor to wait for the results and aggregate them.
-                var gatherOutputActor = Context.System.ActorOf<ComputeAggregatorActor>();
-                gatherOutputActor.Tell(new AggregateComputeRequest() { timeout = TimeSpan.FromMilliseconds(10000) });
-
-                for (int i = 0; i < m.loadSize; i++)
-                {
-                    var input = Enumerable.Range(0, (int)m.inputSize).Cast<object>();
-                    var inputJson = JsonSerializer.Serialize(input);
-                    Context.System.ActorSelection("user/compute-router").Tell(new ComputeRequest()
-                    {
-                        /*
-                        JSONargs = inputJson,
-                        assemblyName = "CoreLib",
-                        fullClassName = "CoreLib.DSCore.List",
-                        functionName = "Shuffle",
-                        ID = Guid.NewGuid(),
-                        */
-                        outputActor = gatherOutputActor
-                    });
-                };
-            });
-        }
-
-        protected override void PreStart() => Console.WriteLine($"starting {nameof(ComputeLoadGenerator)} {this.Self.Path}");
-        protected override void PostStop() => Console.WriteLine($"stopping {nameof(ComputeLoadGenerator)} {this.Self.Path}");
     }
 
     public class ComputeRouter : Akka.Actor.ReceiveActor
@@ -122,7 +130,6 @@ namespace ActorSystems
             var actor = Context.ActorOf(props);
             Receive<ComputeRequest>(m =>
             {
-                Context.Watch(m.outputActor);
                 switch (m.functionCallData.assemblyName)
                 {
                     case null:
@@ -136,11 +143,6 @@ namespace ActorSystems
                     default: throw new Exception($"router does not know how to route compute requests for {m.functionCallData.assemblyName}");
                 }
             });
-            Receive<Terminated>(m =>
-            {
-                Console.WriteLine($"output sink is dead, let's give up {this.Self.Path}");
-                Context.Stop(Self);
-            });
         }
 
         protected override void PreStart() => Console.WriteLine($"starting {nameof(ComputeRouter)} {this.Self.Path}");
@@ -153,31 +155,49 @@ namespace ActorSystems
         {
             Receive<ComputeRequest>(m =>
             {
-                //if the output sink dies, then we'll stop computing.
-                Context.Watch(m.outputActor);
 
-                //TODO do some magic to marshal args to method types we need.
+                //TODO do some magic to marshal args to method types we need from the method info...
+                //consider how simple and limited we can make replication and still keep it useful.
+
                 //TODO make this faster, no reason to keep looking up these methodinfos - cache them.
-                var serializeOptions = new JsonSerializerOptions();
-                serializeOptions.Converters.Add(new ObjectConverter());
-                var args = JsonSerializer.Deserialize<object>(m.functionCallData.JSONargs, serializeOptions);
+
+                var args = m.functionCallData.Args;
                 var assem = AppDomain.CurrentDomain.GetAssemblies().Where(x => x.GetName().Name == m.functionCallData.assemblyName).FirstOrDefault();
                 var t = assem.GetType(m.functionCallData.fullClassName);
                 var info = t.GetMethods().Where(x => x.Name == m.functionCallData.functionName).FirstOrDefault();
-                var o = info.Invoke(null, new object[] { args });
+
+                var methodparams = info.GetParameters();
+                var newParams = new object[args.Length];
+                for (int i = 0; i < methodparams.Length; i++)
+                {
+                    newParams[i]= MarshallMessageArgsToExpectedParamArg(methodparams[i], args[i]);
+                }
+
+                var o = info.Invoke(null, newParams);
 
                 m.outputActor.Tell(new ComputeResponse()
                 {
-                    outputAsJSON = JsonSerializer.Serialize(o),
+                    output = o,
                     ID = m.ID
                 });
             });
+        }
 
-            Receive<Terminated>(m =>
+        private object MarshallMessageArgsToExpectedParamArg(ParameterInfo param, Argument messageArg)
+        {
+            //we expect a list, but we don't have one, wrap the object.
+            if (param.ParameterType.IsAssignableTo(typeof(IList)) && !messageArg.Value.GetType().IsAssignableTo(typeof(IList)))
             {
-                Console.WriteLine($"output sink is dead, let's give up {this.Self.Path}");
-                Context.Stop(Self);
-            });
+                return new object[] { messageArg.Value };
+            }
+
+            //we have a collection, but we expect a single item...
+            if (!param.ParameterType.IsAssignableTo(typeof(IList)) && messageArg.Value.GetType().IsAssignableTo(typeof(IList)))
+            {
+                return new object[] { (messageArg.Value as IList)[0] };
+            }
+
+            return messageArg.Value;
         }
         protected override void PreStart() => Console.WriteLine($"starting {nameof(ComputeActor)} {this.Self.Path}");
         protected override void PostStop() => Console.WriteLine($"stopping {nameof(ComputeActor)} {this.Self.Path}");
@@ -202,28 +222,29 @@ namespace ActorSystems
     public class ComputeAggregatorActor : Akka.Actor.ReceiveActor
     {
 
-        Dictionary<Guid, object> replies;
+        List<object> replies;
         uint expectedNum;
 
         public ComputeAggregatorActor()
         {
+            IActorRef? router = null; 
             ICancelable timeoutTimer = null;
             Receive<AggregateComputeRequest>(m =>
             {   
-                //DO THIS NEXT
-                //TODO... if this is zero we want to replicate based on the input size...
-                //should that be determined here or somewhere else?
                 expectedNum = m.functionCallComputeRequest.numreplications;
-                replies = new Dictionary<Guid, object>((int)expectedNum);
+                replies = new List<object>();
                 timeoutTimer = Context.System.Scheduler.ScheduleTellOnceCancelable(m.timeout, Self, new ComputeTimeoutMessage(), Self);
 
-                var newRouter = Context.ActorOf<ComputeRouter>($"compute-router-{m.functionCallComputeRequest.functionName}");
-                //command replicate the compute.
+                router = Context.ActorOf<ComputeRouter>($"compute-router-{m.functionCallComputeRequest.functionName}");
+                //replicate the compute.
+                //but we need to split the data between each call.
                 for (int i = 0; i < expectedNum; i++)
                 {
-                    newRouter.Tell(new ComputeRequest()
+                    var subFuncRequest = new FunctionCallComputeRequest(m.functionCallComputeRequest, i);
+
+                    router.Tell(new ComputeRequest()
                     {
-                        functionCallData = m.functionCallComputeRequest,
+                        functionCallData = subFuncRequest,
                         ID = Guid.NewGuid(),
                         outputActor = Self
                     });
@@ -238,11 +259,12 @@ namespace ActorSystems
             });
             Receive<ComputeResponse>(m =>
             {
-                replies.Add(m.ID, m.outputAsJSON);
-                if (replies.Count >= expectedNum)
+                replies.Add(m.output);
+                if (replies.Count() >= expectedNum)
                 {
                     timeoutTimer.Cancel();
-
+                    Context.Stop(Self);
+                    Context.Parent.Tell(new ReplicatedCommandCompleteMessage() { data = replies.ToArray() });
                 }
             });
 

@@ -110,6 +110,7 @@ namespace ActorSystems.Messages
     public class ComputeRequest
         {
             public FunctionCallComputeRequest functionCallData;
+            public int index;   
             public Guid ID;
             public IActorRef outputActor;
 
@@ -127,6 +128,7 @@ namespace ActorSystems.Messages
         /// ID of response matches id of the request that created this data.
         /// </summary>
         public Guid ID;
+        public int index;
         public object output;
     }
     public class AggregateComputeRequest
@@ -152,6 +154,15 @@ namespace ActorSystems.Messages
     public class ReplicatedCommandCompleteMessage()
     {
         public object[] data;
+    }
+
+    public record ViewUpdateRequestMessage()
+    {
+        public IList data;
+        public int xoff;
+        public int yoff;
+        public int height;
+        public int width;
     }
 
 }

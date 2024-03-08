@@ -11,6 +11,7 @@ using System.Threading;
 using System.ComponentModel.DataAnnotations;
 using Akka.Dispatch.SysMsg;
 using System.Collections;
+using System.IO;
 namespace ActorSystems
 {
     internal class Program
@@ -22,15 +23,17 @@ namespace ActorSystems
         
             Console.WriteLine("Starting actor system!!!");
             ActorSystem system = ActorSystem.Create("system");
+            var view = system.ActorOf<ViewActor>("view-actor");
+            System.Threading.Thread.Sleep(1000);
             var orch = system.ActorOf<OrchestratorActor>("orchestrator");
 
             Console.WriteLine("sending command list to orchestrate");
 
             var commandList = new FunctionCallComputeRequest[]
             {
-                new FunctionCallComputeRequest([new Argument("size",false,0,32)] , "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",320000,"var_data0"),
+                new FunctionCallComputeRequest([new Argument("size",false,0,32)] , "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",32*1024,"var_data0"),
                 new FunctionCallComputeRequest([new Argument("var_data0", true,1,null),new Argument("increment",false,0,100)], "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data1"),
-                new FunctionCallComputeRequest([new Argument("var_data1", true,1,null),new Argument("modval",false,0,255)], "CoreLib","CoreLib.DSCore.List","Mod",0, "var_data2")
+                new FunctionCallComputeRequest([new Argument("var_data1", true,1,null),new Argument("modval",false,0,64)], "CoreLib","CoreLib.DSCore.List","Mod",0, "var_data2")
             };
             orch.Tell(new OrchestrateProgramMessage(commandList));
 
@@ -126,7 +129,7 @@ namespace ActorSystems
         public ComputeRouter()
         {
             //we want different behavior for a total c# actor vs a libG compute actor...
-            var props = Props.Create<ComputeActor>().WithRouter(new RoundRobinPool(5, new DefaultResizer(1, 100)));
+            var props = Props.Create<ComputeActor>().WithRouter(new RoundRobinPool(5, new DefaultResizer(1, 200)));
             var actor = Context.ActorOf(props);
             Receive<ComputeRequest>(m =>
             {
@@ -178,7 +181,8 @@ namespace ActorSystems
                 m.outputActor.Tell(new ComputeResponse()
                 {
                     output = o,
-                    ID = m.ID
+                    ID = m.ID,
+                    index = m.index
                 });
             });
         }
@@ -246,7 +250,8 @@ namespace ActorSystems
                     {
                         functionCallData = subFuncRequest,
                         ID = Guid.NewGuid(),
-                        outputActor = Self
+                        outputActor = Self,
+                        index = i,
                     });
                 }
             });
@@ -260,6 +265,12 @@ namespace ActorSystems
             Receive<ComputeResponse>(m =>
             {
                 replies.Add(m.output);
+                Context.System.ActorSelection("/user/view-actor").Tell(new ViewUpdateRequestMessage()
+                {
+                    xoff = (m.index*32)%1024,
+                    yoff = (m.index/32)%1024,
+                    width = 32, height = 1
+                }); ;
                 if (replies.Count() >= expectedNum)
                 {
                     timeoutTimer.Cancel();

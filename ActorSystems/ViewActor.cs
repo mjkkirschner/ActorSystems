@@ -2,6 +2,7 @@
 using Akka.Actor;
 using Akka.Dispatch;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -70,10 +71,16 @@ namespace ActorSystems
             {
                 //we're going to get a message with a chunk of data - lets just draw that chunk / rect.
                 //we can just draw random colors for now.
-                var c = Color.FromArgb(255, (byte)rnd.Next(256), (byte)rnd.Next(256), (byte)rnd.Next(256));
+                
                 dispatcher.Invoke(()=>
                {
-                   writable.DrawRectangle(m.xoff, m.yoff, m.xoff+m.width, m.yoff + m.height,c);
+                   var datalist = m.data as IList;
+                   for (int i = 0; i < datalist.Count-4; i=i+4)
+                   {
+                       var c = Color.FromArgb((byte)((int)datalist[i + 0] & 0x000000FF), (byte)((int)datalist[i+1] & 0x000000FF), (byte)((int)datalist[i + 2] & 0x000000FF), (byte)((int)datalist[i + 3] & 0x000000FF));
+                       writable.SetPixel(m.xoff+(i/4), m.yoff, c);
+                   }
+                   
                });
              
             });

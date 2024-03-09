@@ -158,7 +158,7 @@ namespace ActorSystems.Messages
 
     public record ViewUpdateRequestMessage()
     {
-        public IList data;
+        public object data;
         public int xoff;
         public int yoff;
         public int height;

@@ -9,7 +9,7 @@
 
     namespace DSCore
     {
-
+        
         #region public methods
         /// <summary>
         ///     Methods for creating and manipulating Lists.
@@ -17,6 +17,8 @@
         [IsVisibleInDynamoLibrary(false)]
         public static class List
         {
+            static int counter;
+
             public static IList Increment(IList list,int inc)
             {
                 var output = new List<int>();
@@ -40,7 +42,20 @@
 
             public static IList EmptyListOfSize(double size)
             {
-                return new int[(int)size];
+                counter = counter + 1;
+                var output = new List<int>();
+                //var a = mRandom.Next(255);
+                var b = mRandom.Next(255);
+                var g = mRandom.Next(255);
+                var r = mRandom.Next(255);
+                
+                var cell = new int[] { 255, r, g, b };
+
+                for (int i = 0; i < (int)size/4; i++)
+                {
+                    output.AddRange(cell);
+                }
+                return output.ToArray();
             }
 
             /// <summary>

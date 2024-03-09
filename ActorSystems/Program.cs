@@ -31,9 +31,11 @@ namespace ActorSystems
 
             var commandList = new FunctionCallComputeRequest[]
             {
-                new FunctionCallComputeRequest([new Argument("size",false,0,32)] , "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",32*1024,"var_data0"),
-                new FunctionCallComputeRequest([new Argument("var_data0", true,1,null),new Argument("increment",false,0,100)], "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data1"),
-                new FunctionCallComputeRequest([new Argument("var_data1", true,1,null),new Argument("modval",false,0,64)], "CoreLib","CoreLib.DSCore.List","Mod",0, "var_data2")
+                new FunctionCallComputeRequest([new Argument("size",false,0,32*4)] , "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",32*1024,"var_data0"),
+                new FunctionCallComputeRequest([new Argument("var_data0", true,1,null),new Argument("increment",false,0,128)], "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data1"),
+                new FunctionCallComputeRequest([new Argument("var_data1", true,1,null),new Argument("increment",false,0,-128)], "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data2"),
+                //TODO try adding a goto request that sets the program counter of the orchestrator back to 1 so we can loop. (above we need to write to var_data0 as last output.
+                //new FunctionCallComputeRequest([new Argument("var_data1", true,1,null),new Argument("modval",false,0,128)], "CoreLib","CoreLib.DSCore.List","Mod",0, "var_data2")
             };
             orch.Tell(new OrchestrateProgramMessage(commandList));
 
@@ -45,7 +47,7 @@ namespace ActorSystems
     {
         int programCounter = 0;
         string currentID;
-        static TimeSpan timeout = TimeSpan.FromMilliseconds(10000000);
+        static TimeSpan timeout = TimeSpan.FromMilliseconds(1000000);
 
         //maps id of replicated request to value produced by that instruction.
         Dictionary<string, object> state = new Dictionary<string, object>();
@@ -99,7 +101,7 @@ namespace ActorSystems
                 }
 
                 //create a tree of actors to exceute this instruction.
-                var gatherOutputActor = Context.ActorOf<ComputeAggregatorActor>($"aggregator-{currentInst.functionName}");
+                var gatherOutputActor = Context.ActorOf<ComputeAggregatorActor>($"aggregator-{currentInst.functionName}{currentInst.ID}");
                 gatherOutputActor.Tell(new AggregateComputeRequest() { timeout = timeout, functionCallComputeRequest = currentInst });
                 state.Add(currentID, null);
             });
@@ -268,9 +270,10 @@ namespace ActorSystems
                 Context.System.ActorSelection("/user/view-actor").Tell(new ViewUpdateRequestMessage()
                 {
                     xoff = (m.index*32)%1024,
-                    yoff = (m.index/32)%1024,
-                    width = 32, height = 1
-                }); ;
+                    yoff = (m.index * 32)/1024,
+                    width = 32, height = 1,data= m.output,
+                   
+                });; ;
                 if (replies.Count() >= expectedNum)
                 {
                     timeoutTimer.Cancel();

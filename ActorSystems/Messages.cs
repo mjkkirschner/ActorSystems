@@ -37,7 +37,16 @@ namespace ActorSystems.Messages
         }
     }
 
-        public record FunctionCallComputeRequest
+    public record Command
+    {
+
+    }
+    public record GotoCommand:Command
+    {
+        public int InstructionToJumpTo;
+    }
+
+    public record FunctionCallComputeRequest:Command
     {
         public Argument[] Args;
         public string assemblyName;
@@ -143,9 +152,9 @@ namespace ActorSystems.Messages
 
     public record OrchestrateProgramMessage
     {
-        public FunctionCallComputeRequest[] commandList;
+        public Command[] commandList;
 
-        public OrchestrateProgramMessage(FunctionCallComputeRequest[] commandList)
+        public OrchestrateProgramMessage(Command[] commandList)
         {
             this.commandList = commandList;
         }

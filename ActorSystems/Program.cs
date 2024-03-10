@@ -12,6 +12,7 @@ using System.ComponentModel.DataAnnotations;
 using Akka.Dispatch.SysMsg;
 using System.Collections;
 using System.IO;
+using Akka.Util.Internal;
 namespace ActorSystems
 {
     internal class Program
@@ -20,7 +21,7 @@ namespace ActorSystems
         {
             Console.WriteLine("Hello, World! Loading shared dlls");
             Assembly.LoadFrom(System.IO.Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "CoreLib.dll"));
-        
+
             Console.WriteLine("Starting actor system!!!");
             ActorSystem system = ActorSystem.Create("system");
             var view = system.ActorOf<ViewActor>("view-actor");
@@ -29,11 +30,21 @@ namespace ActorSystems
 
             Console.WriteLine("sending command list to orchestrate");
 
-            var commandList = new FunctionCallComputeRequest[]
+            var commandList = new Command[]
             {
-                new FunctionCallComputeRequest([new Argument("size",false,0,32*4)] , "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",32*1024,"var_data0"),
-                new FunctionCallComputeRequest([new Argument("var_data0", true,1,null),new Argument("increment",false,0,128)], "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data1"),
-                new FunctionCallComputeRequest([new Argument("var_data1", true,1,null),new Argument("increment",false,0,-128)], "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data2"),
+                new FunctionCallComputeRequest([
+                    new Argument("size",false,0,32*4)] ,
+                    "CoreLib","CoreLib.DSCore.List","EmptyListOfSize",32*1024,"var_data0"),
+                new FunctionCallComputeRequest([
+                    new Argument("var_data0", true,1,null),
+                    new Argument("increment",false,0,128)],
+                        "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data1"),
+                new FunctionCallComputeRequest([
+                    new Argument("var_data1", true,1,null),
+                    new Argument("increment",false,0,-128)],
+                    "CoreLib","CoreLib.DSCore.List","Increment",0, "var_data0"),
+                new GotoCommand(){InstructionToJumpTo = 1}
+
                 //TODO try adding a goto request that sets the program counter of the orchestrator back to 1 so we can loop. (above we need to write to var_data0 as last output.
                 //new FunctionCallComputeRequest([new Argument("var_data1", true,1,null),new Argument("modval",false,0,128)], "CoreLib","CoreLib.DSCore.List","Mod",0, "var_data2")
             };
@@ -51,7 +62,7 @@ namespace ActorSystems
 
         //maps id of replicated request to value produced by that instruction.
         Dictionary<string, object> state = new Dictionary<string, object>();
-        FunctionCallComputeRequest[] currentCommandList;
+        Command[] currentCommandList;
         public OrchestratorActor()
         {
             // this message looks like a log, we're going to step through each entry, request it to be executed by our actors
@@ -60,50 +71,60 @@ namespace ActorSystems
             Receive<OrchestrateProgramMessage>(m =>
             {
                 currentCommandList = m.commandList;
-                if(m.commandList.Length-1 < programCounter)
+                if (m.commandList.Length - 1 < programCounter)
                 {
                     return;
                 }
                 var currentInst = m.commandList[programCounter];
-                currentID = currentInst.ID;
-
-                //we need to replace the data in the request we're about to make with the data we've previously computed.
-                //first search the input args for identifiers
-                var ids = currentInst.Args.Where(x => x.IsIdentifer);
-                //use those ids to lookup the values in the state dict.
-                if(ids.Any()) {
-                    //TODO for now only handle one identifer.
-                    if (ids.Count() > 1)
-                    {
-                        throw new NotImplementedException();
-                    }
-                    var lastcomputed = state[ids.FirstOrDefault().Name];
-
-                    //!!!!!!!!!!
-                    //TODO THIS IS BAD - instead create a copy of the current instruction and use that as a message -
-                    //don't modify the existing message... when we have time fix this.
-                    ids.FirstOrDefault().Value = lastcomputed;
-
-                    //we can also try to compute the replication factor here based on the size of the input.
-                    //only modify if it was not set initially in command list.
-                    //TODO same here - don't modify this directly, create a clone to modify.
-                    if (currentInst.numreplications == 0) {
-                       
-                        if(lastcomputed is ICollection ia)
-                        {
-                            currentInst.numreplications = (uint)ia.Count;
-                        }
-                        else
-                        {
-                            currentInst.numreplications = 1;
-                        }
-                    }
+                if (currentInst is GotoCommand gotoInst)
+                {
+                    programCounter = gotoInst.InstructionToJumpTo;
                 }
+                currentInst = m.commandList[programCounter];
+                if (currentInst is FunctionCallComputeRequest currentFuncInst)
+                {
+                    currentID = currentFuncInst.ID;
 
-                //create a tree of actors to exceute this instruction.
-                var gatherOutputActor = Context.ActorOf<ComputeAggregatorActor>($"aggregator-{currentInst.functionName}{currentInst.ID}");
-                gatherOutputActor.Tell(new AggregateComputeRequest() { timeout = timeout, functionCallComputeRequest = currentInst });
-                state.Add(currentID, null);
+                    //we need to replace the data in the request we're about to make with the data we've previously computed.
+                    //first search the input args for identifiers
+                    var ids = currentFuncInst.Args.Where(x => x.IsIdentifer);
+                    //use those ids to lookup the values in the state dict.
+                    if (ids.Any())
+                    {
+                        //TODO for now only handle one identifer.
+                        if (ids.Count() > 1)
+                        {
+                            throw new NotImplementedException();
+                        }
+                        var lastcomputed = state[ids.FirstOrDefault().Name];
+
+                        //!!!!!!!!!!
+                        //TODO THIS IS BAD - instead create a copy of the current instruction and use that as a message -
+                        //don't modify the existing message... when we have time fix this.
+                        ids.FirstOrDefault().Value = lastcomputed;
+
+                        //we can also try to compute the replication factor here based on the size of the input.
+                        //only modify if it was not set initially in command list.
+                        //TODO same here - don't modify this directly, create a clone to modify.
+                        if (currentFuncInst.numreplications == 0)
+                        {
+
+                            if (lastcomputed is ICollection ia)
+                            {
+                                currentFuncInst.numreplications = (uint)ia.Count;
+                            }
+                            else
+                            {
+                                currentFuncInst.numreplications = 1;
+                            }
+                        }
+                    }
+
+                    //create a tree of actors to exceute this instruction.
+                    var gatherOutputActor = Context.ActorOf<ComputeAggregatorActor>($"aggregator-{currentFuncInst.functionName}{currentFuncInst.ID}");
+                    gatherOutputActor.Tell(new AggregateComputeRequest() { timeout = timeout, functionCallComputeRequest = currentFuncInst });
+                    state.AddOrSet(currentID, null);
+                }
             });
 
             Receive<ReplicatedCommandCompleteMessage>(m =>
@@ -175,7 +196,7 @@ namespace ActorSystems
                 var newParams = new object[args.Length];
                 for (int i = 0; i < methodparams.Length; i++)
                 {
-                    newParams[i]= MarshallMessageArgsToExpectedParamArg(methodparams[i], args[i]);
+                    newParams[i] = MarshallMessageArgsToExpectedParamArg(methodparams[i], args[i]);
                 }
 
                 var o = info.Invoke(null, newParams);
@@ -233,10 +254,10 @@ namespace ActorSystems
 
         public ComputeAggregatorActor()
         {
-            IActorRef? router = null; 
+            IActorRef? router = null;
             ICancelable timeoutTimer = null;
             Receive<AggregateComputeRequest>(m =>
-            {   
+            {
                 expectedNum = m.functionCallComputeRequest.numreplications;
                 replies = new List<object>();
                 timeoutTimer = Context.System.Scheduler.ScheduleTellOnceCancelable(m.timeout, Self, new ComputeTimeoutMessage(), Self);
@@ -269,11 +290,13 @@ namespace ActorSystems
                 replies.Add(m.output);
                 Context.System.ActorSelection("/user/view-actor").Tell(new ViewUpdateRequestMessage()
                 {
-                    xoff = (m.index*32)%1024,
-                    yoff = (m.index * 32)/1024,
-                    width = 32, height = 1,data= m.output,
-                   
-                });; ;
+                    xoff = (m.index * 32) % 1024,
+                    yoff = (m.index * 32) / 1024,
+                    width = 32,
+                    height = 1,
+                    data = m.output,
+
+                }); ; ;
                 if (replies.Count() >= expectedNum)
                 {
                     timeoutTimer.Cancel();
